@@ -1,5 +1,6 @@
 # templates: https://github.com/dfelinto/blender/tree/master/release/scripts/templates_py
 import math
+import itertools
 
 import bpy
 import bmesh
@@ -11,7 +12,7 @@ bl_info = {
     "name": "Face color picker",
     "description": "Assign individual faces to distinct uv areas.",
     "author": "doctorseus",
-    "version": (1, 0),
+    "version": (1, 1),
     "blender": (2, 92, 0),
     "location": "UV Editor > UV Edit Mode menu",
     "warning": "", # used for warning icon and text in add-ons panel
@@ -46,10 +47,10 @@ def main(operator, context, event):
 
     # CCW
     uv_corners = [
-        (box_width * box_x + uv_padding_x, box_height * (box_y + 1) - uv_padding_x),  # top, left
-        (box_width * box_x + uv_padding_x, box_height * box_y + uv_padding_x),        # bottom, left
-        (box_width * (box_x + 1) - uv_padding_x, box_height * box_y + uv_padding_x),  # bottom, right
-        (box_width * (box_x + 1) - uv_padding_x, box_height * (box_y + 1) - uv_padding_x),  # top, right
+        (box_width * box_x + uv_padding_x, box_height * (box_y + 1) - uv_padding_y),  # top, left
+        (box_width * box_x + uv_padding_x, box_height * box_y + uv_padding_y),        # bottom, left
+        (box_width * (box_x + 1) - uv_padding_x, box_height * box_y + uv_padding_y),  # bottom, right
+        (box_width * (box_x + 1) - uv_padding_x, box_height * (box_y + 1) - uv_padding_y),  # top, right
     ]
 
     # all selected objects
@@ -141,14 +142,98 @@ class UVFaceColorPicker(WorkSpaceTool):
         layout.prop(props, "padding")
 
 
+# Original NewImage Op https://github.com/blender/blender/blob/master/source/blender/editors/space_image/image_ops.c#L2436
+
+class OPDrawColorPalette(bpy.types.Operator):
+    bl_idname = "image.draw_color_palette"
+    bl_label = "Draw Color Palette"
+    bl_options = {'UNDO'}
+
+    xsteps: IntProperty(name="Columns", min=1, default=16)
+    ysteps: IntProperty(name="Rows", min=1, default=16)
+
+    def execute(self, context):
+        for area in bpy.context.screen.areas:
+            if area.type == 'IMAGE_EDITOR':
+                image = area.spaces.active.image
+
+                if image is None:
+                    self.report({'ERROR'}, "No image found")
+                    return {'FINISHED'}
+
+                colors = [(c.color.r, c.color.g, c.color.b) for c in bpy.context.tool_settings.image_paint.palette.colors]
+                colors_max = len(colors)
+
+                image_width = image.size[0]
+                image_height = image.size[1]
+
+                step_width = image_width / self.xsteps
+                step_height = image_height / self.ysteps
+
+                def get_pixel(idx):
+                    x = idx % image_width
+                    y = image_height - int(idx / image_width)
+                    return x, y
+
+                def get_box_color(coord):
+                    x = coord[0]
+                    y = coord[1]
+
+                    box_x = int(x / step_width)
+                    box_y = int(y / step_height)
+
+                    box_color = box_x + (box_y * self.xsteps)
+
+                    if box_color < colors_max:
+                        color = colors[box_color]
+                    else:
+                        color = (0, 0, 0)
+
+                    return color[0], color[1], color[2], 1
+
+                pixels = [get_box_color(get_pixel(idx)) for idx in range(0, image_width * image_height)]
+                pixels = list(itertools.chain(*pixels))
+
+                image.pixels = pixels
+
+        return {"FINISHED"}
+
+    def invoke(self, context, event):
+        wm = context.window_manager
+        return wm.invoke_props_dialog(self)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+
+        layout.prop(self, "xsteps")
+        layout.prop(self, "ysteps")
+
+        settings = context.tool_settings.image_paint
+        layout.template_ID(settings, "palette")
+        layout.template_palette(settings, "palette", color=True)
+
+
+def image_menu_func(self, context):
+    for area in bpy.context.screen.areas:
+        if area.type == 'IMAGE_EDITOR':
+            if area.spaces.active.image is not None:
+                self.layout.operator(OPDrawColorPalette.bl_idname)
+
+
 def register():
     bpy.utils.register_class(UVSelectFaceColorOperator)
     bpy.utils.register_tool(UVFaceColorPicker, separator=True, group=True)
+    bpy.utils.register_class(OPDrawColorPalette)
+    bpy.types.IMAGE_MT_image.append(image_menu_func)
 
 
 def unregister():
     bpy.utils.unregister_class(UVSelectFaceColorOperator)
     bpy.utils.unregister_tool(UVFaceColorPicker)
+    bpy.utils.unregister_class(OPDrawColorPalette)
+    bpy.types.IMAGE_MT_image.remove(image_menu_func)
 
 
 if __name__ == "__main__":
